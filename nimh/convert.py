@@ -1,5 +1,7 @@
 import os.path
 import subprocess
+
+import pandas
 import pandas as pd
 import sys
 from os.path import isdir, isfile
@@ -7,7 +9,8 @@ from os import listdir, walk, makedirs
 import pathlib
 import json
 import pydicom
-
+import re
+from numpy import cumsum
 
 required_bids_fields = {
     "Manufacturer": {"location": "pet_json", "alias": None, "value": None},
@@ -129,8 +132,8 @@ class Convert:
         try:
             use_me_to_read = methods.get(proper_method, None)
             self.metadata_dataframe = use_me_to_read(self.metadata_path)
-        except IOError:
-            print(f"Problem opening {self.metadata_path}")
+        except IOError as err:
+            raise err(f"Problem opening {self.metadata_path}")
 
     def run_dcm2niix(self):
         """
@@ -146,6 +149,64 @@ class Convert:
         # of the folder dcm2niix was pointed at with a .nii extension. In other words it will place a .nii file with
         # the parent folder's name in the parent folder. We need to keep track of this path and possibly (most likely)
         # rename it
+
+    def bespoke(self):
+        """
+        In [5]: df = pd.DataFrame([[1,2], [3,4]], columns=['a', 'b'])
+
+        In [6]: df
+        Out[6]:
+                   a  b
+                0  1  2
+                1  3  4
+
+        In [7]: df[df.columns[0]]
+        Out[7]:
+                0    1
+                1    3
+        Name: a, dtype: int64
+
+        :return:
+        """
+
+        future_json = {
+            'Manufacturer': self.nifti_json_data['Manufacturer'],
+            'ManufacturersModelName': self.nifti_json_data['ManufacturersModelName'],
+            'Units': 'Bq/mL',
+            'TracerName': self.nifti_json_data['Radiopharmaceutical'],  # need to grab part of this string
+            'TracerRadionuclide': self.nifti_json_data['RadionuclideTotalDose']/10**6,
+            'InjectedRadioactivityUnits': 'MBq',
+            'InjectedMass': self.metadata_dataframe.iloc[35, 10]*self.metadata_dataframe.iloc[38, 6],  # nmol/kg * weight
+            'InjectedMassUnits': 'nmol',
+            'MolarActivity': self.metadata_dataframe.iloc[0, 35]*0.000037,  # uCi to GBq
+            'MolarActivityUnits': 'GBq/nmol',
+            'SpecificRadioactivity': 'n/a',
+            'SpecificRadioactivityUnits': 'n/a',
+            'ModeOfAdministration': 'bolus',
+            'TimeZero': '10:15:14',
+            'ScanStart': 61,
+            'InjectionStart': 0,
+            'FrameTimesStart':
+                [0] +
+                list(cumsum(self.nifti_json_data['FrameDuration']))[0:len(self.nifti_json_data['FrameDuration']) - 1],
+            'FrameDuration': self.nifti_json_data['FrameDuration'],
+            'AcquisitionMode': 'list mode',
+            'ImageDecayCorrected': True,
+            'ImageDecayCorrectionTime': -61,
+            'ReconMethodName': self.dicom_header_data.ReconstructionMethod,
+            'ReconMethodParameterLabels': ['iterations', 'subsets', 'lower energy threshold', 'upper energy threshold'],
+            'ReconMethodParameterUnits': ['none', 'none', 'keV', 'keV'],
+            'ReconMethodParameterValues': [
+                float(min(re.findall('\d+\.\d+', str(self.dicom_header_data.EnergyWindowRangeSequence).lower()))),
+                float(max(re.findall('\d+\.\d+', str(self.dicom_header_data.EnergyWindowRangeSequence).lower()))),
+            ],
+            'ReconFilterType': self.dicom_header_data.ConvolutionKernel,
+            'ReconFilterSize': 0,
+            'AttenuationCorrection': self.dicom_header_data.AttenuationCorrectionMethod,
+            'DecayCorrectionFactor': self.nifti_json_data['DecayFactor']
+        }
+
+        return future_json
 
 
 def cli():
