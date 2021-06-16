@@ -151,23 +151,6 @@ class Convert:
         # rename it
 
     def bespoke(self):
-        """
-        In [5]: df = pd.DataFrame([[1,2], [3,4]], columns=['a', 'b'])
-
-        In [6]: df
-        Out[6]:
-                   a  b
-                0  1  2
-                1  3  4
-
-        In [7]: df[df.columns[0]]
-        Out[7]:
-                0    1
-                1    3
-        Name: a, dtype: int64
-
-        :return:
-        """
 
         future_json = {
             'Manufacturer': self.nifti_json_data['Manufacturer'],
