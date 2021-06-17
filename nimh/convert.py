@@ -44,6 +44,7 @@ class Convert:
                 print(f"No folder found at destination, creating folder(s) at {destination_path}")
                 makedirs(destination_path)
 
+
         if self.check_for_dcm2niix() != 0:
             raise Exception("dcm2niix error:\n" +
                             "The converter relies on dcm2niix.\n" +
@@ -57,6 +58,32 @@ class Convert:
         self.extract_dicom_header()
         self.extract_nifti_json()
         self.extract_metadata()
+
+        # create strings for output files
+        if self.session_id:
+            self.session_string = '_ses-' + self.session_id
+        else:
+            self.session_string = ''
+
+        # now for subject id
+        if subject_id:
+            self.subject_id = subject_id
+        else:
+            self.subject_id = str(self.dicom_header_data.PatientName)
+            # check for non-bids values
+            self.subject_id = re.sub("[^a-zA-Z\d\s:]", '', self.subject_id)
+
+        self.subject_string = 'sub-' + self.subject_id
+
+        # build output structures for metadata
+        bespoke_data = self.bespoke()
+
+        # assign output structures to class variables
+        self.future_json = bespoke_data['future_json']
+        self.future_blood_tsv = bespoke_data['future_blood_tsv']
+        self.future_blood_json = bespoke_data['future_blood_json']
+        self.participant_info = bespoke_data['participants_info']
+
 
     @staticmethod
     def check_for_dcm2niix():
@@ -170,8 +197,8 @@ class Convert:
             'ScanStart': 61,
             'InjectionStart': 0,
             'FrameTimesStart':
-                [0] +
-                list(cumsum(self.nifti_json_data['FrameDuration']))[0:len(self.nifti_json_data['FrameDuration']) - 1],
+                [int(entry) for entry in ([0] +
+                list(cumsum(self.nifti_json_data['FrameDuration']))[0:len(self.nifti_json_data['FrameDuration']) - 1])],
             'FrameDuration': self.nifti_json_data['FrameDuration'],
             'AcquisitionMode': 'list mode',
             'ImageDecayCorrected': True,
@@ -187,9 +214,72 @@ class Convert:
             'ReconFilterSize': 0,
             'AttenuationCorrection': self.dicom_header_data.AttenuationCorrectionMethod,
             'DecayCorrectionFactor': self.nifti_json_data['DecayFactor']
+
         }
 
-        return future_json
+        future_blood_json = {
+
+        }
+
+        future_blood_tsv = {
+            'time': self.metadata_dataframe.iloc[2:7, 6]*60, # convert minutes to seconds,
+            'PlasmaRadioactivity': self.metadata_dataframe.iloc[2:7, 7]/60,
+            'WholeBloodRadioactivity': self.metadata_dataframe.iloc[2:7, 9]/60,
+            'MetaboliteParentFraction': self.metadata_dataframe.iloc[2:7, 8]/60
+        }
+
+        participants_tsv = {
+            'sub_id': [self.subject_id],
+            'weight': [self.dicom_header_data.PatientWeight],
+            'sex': [self.dicom_header_data.PatientSex]
+        }
+
+        return {
+            'future_json': future_json,
+            'future_blood_json': future_blood_json,
+            'future_blood_tsv': future_blood_tsv,
+            'participants_info': participants_tsv
+        }
+
+    def write_out_jsons(self, manual_path=None):
+        """
+        Writes out blood and modified *_pet.json file at destination path
+        manual_path: a folder path specified at function cal by user, defaults none
+        :return:
+        """
+
+        if manual_path is None:
+            # dry
+            identity_string = os.path.join(self.destination_path, self.subject_string + self.session_string)
+        else:
+            identity_string = os.path.join(manual_path, self.subject_string + self.session_string)
+
+        with open(identity_string + '_pet.json', 'w') as outfile:
+            json.dump(self.future_json, outfile, indent=4)
+
+        # write out better json
+        with open(identity_string + '_recording-manual-blood.json', 'w') as outfile:
+            json.dump(self.future_blood_json, outfile, indent=4)
+
+    def write_out_blood_tsv(self, manual_path=None):
+        """
+        Creates a blood.tsv
+        manual_path:  a folder path specified at function call by user, defaults none
+        :return:
+        """
+        if manual_path is None:
+            # dry
+            identity_string = os.path.join(self.destination_path, self.subject_string + self.session_string)
+        else:
+            identity_string = os.path.join(manual_path, self.subject_string + self.session_string)
+
+        # make a pandas dataframe from blood data
+        blood_data_df = pandas.DataFrame.from_dict(self.future_blood_tsv)
+        blood_data_df.to_csv(identity_string + '_recording-manual_blood.tsv', sep='\t')
+
+        # make a small dataframe for the participants
+        participants_df = pandas.DataFrame.from_dict(self.participant_info)
+        participants_df.to_csv('participants.tsv', sep='\t')
 
 
 def cli():
