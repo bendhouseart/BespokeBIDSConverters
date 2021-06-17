@@ -1,6 +1,6 @@
 import os.path
 import subprocess
-
+import argparse
 import pandas
 import pandas as pd
 import sys
@@ -11,15 +11,12 @@ import json
 import pydicom
 import re
 from numpy import cumsum
+from gooey import Gooey, GooeyParser
 
-required_bids_fields = {
-    "Manufacturer": {"location": "pet_json", "alias": None, "value": None},
-    "ManufacturersModelName": {"location": "pet_json", "alias": None, "value": None},
-    "Units": {"location": "pet_json", "alias": None, "value": "Bq/mL"},
-    "TracerName": {"location": "pet_json", "alias": "Radiopharmaceutical", "position": {"start": 4, "end": -1}},
-    "TracerRadioNuclide": {"location": "pet_json", "alias": "Radiopharmaceutical", "position": {"start": 1, "end": 3}},
-    "InjectedRadioactivity": {"location": "pet_json", "alias": "RadionuclideTotalDose", "convert": {"units": "Bq to MBQ", "factor": 1/(10**6)}},
-}
+# determine whether to run as gui or not
+if len(sys.argv)>=2:
+        if not '--ignore-gooey' in sys.argv:
+            sys.argv.append('--ignore-gooey')
 
 
 class Convert:
@@ -207,6 +204,8 @@ class Convert:
             'ReconMethodParameterLabels': ['iterations', 'subsets', 'lower energy threshold', 'upper energy threshold'],
             'ReconMethodParameterUnits': ['none', 'none', 'keV', 'keV'],
             'ReconMethodParameterValues': [
+                3,
+                21,
                 float(min(re.findall('\d+\.\d+', str(self.dicom_header_data.EnergyWindowRangeSequence).lower()))),
                 float(max(re.findall('\d+\.\d+', str(self.dicom_header_data.EnergyWindowRangeSequence).lower()))),
             ],
@@ -281,25 +280,38 @@ class Convert:
         participants_df = pandas.DataFrame.from_dict(self.participant_info)
         participants_df.to_csv('participants.tsv', sep='\t')
 
-
+@Gooey
 def cli():
     # simple converter takes command line arguments <folder path> <destination path> <subject-id> <session-id>
-    command_line_args = sys.argv
+    parser = GooeyParser()
+    parser.add_argument('folder-path', type=str,
+                        help="Folder path containing imaging data", widget="FileChooser")
+    parser.add_argument('metadata-path', type=str,
+                        help="Path to metadata file for scan", widget="FileChooser")
+    parser.add_argument('-d', '--destination-path', type=str,
+                        help='''
+                        Destination path to send converted imaging and metadata files to. If 
+                        omitted defaults to using the path supplied to folder path. If destination path
+                        doesn't exist an attempt to create it will be made.''', required=False,
+                        widget="FileChooser")
+    parser.add_argument('-i', '--subject-id', type=str,
+                        help='user supplied subject id. If left blank will use PatientName from dicom header',
+                        required=False)
+    parser.add_argument('-s', '--session_id', type=str,
+                        help='''User supplied session id. If left blank defaults to None/null and omits addition to 
+                             output''')
 
-    if len(command_line_args) < 2:
-        print("Must supply at least a folder path to arguments.")
-        sys.exit(1)
+    args = parser.parse_args()
 
-    if len(command_line_args) >= 2 and isdir(command_line_args[2]):
-        folder_path = command_line_args[1]
-    else:
-        raise FileNotFoundError(f"Folder path {command_line_args[2]} is not a valid folder/path.")
-    if len(command_line_args) >= 3:
-        destination_path = command_line_args[2]
-    if len(command_line_args) >= 4:
-        bids_subject_id = command_line_args[3]
-    if len(command_line_args) >= 5:
-        bids_session_id = command_line_args[4]
+    if not isdir(args.folder_path):
+        raise FileNotFoundError(f"{args.folder_path} is not a valid path")
+
+    converter = Convert(args.folder_path, args.destination_path, args.subject_id, args.session_id)
+
+    # convert it all!
+    converter.bespoke()
+    converter.write_out_jsons()
+    converter.write_out_blood_tsv()
 
 
 if __name__ == "__main__":
