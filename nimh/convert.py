@@ -14,9 +14,9 @@ from numpy import cumsum
 from gooey import Gooey, GooeyParser
 
 # determine whether to run as gui or not
-if len(sys.argv)>=2:
-        if not '--ignore-gooey' in sys.argv:
-            sys.argv.append('--ignore-gooey')
+if len(sys.argv) >= 2:
+    if '--ignore-gooey' not in sys.argv:
+        sys.argv.append('--ignore-gooey')
 
 
 class Convert:
@@ -41,12 +41,10 @@ class Convert:
                 print(f"No folder found at destination, creating folder(s) at {destination_path}")
                 makedirs(destination_path)
 
-
         if self.check_for_dcm2niix() != 0:
             raise Exception("dcm2niix error:\n" +
                             "The converter relies on dcm2niix.\n" +
                             "dcm2niix was not found in path, try installing or adding to path variable.")
-
 
         # no reason not to convert the image files immediately if dcm2niix is there
         self.run_dcm2niix()
@@ -80,7 +78,6 @@ class Convert:
         self.future_blood_tsv = bespoke_data['future_blood_tsv']
         self.future_blood_json = bespoke_data['future_blood_json']
         self.participant_info = bespoke_data['participants_info']
-
 
     @staticmethod
     def check_for_dcm2niix():
@@ -289,17 +286,17 @@ def cli():
     parser.add_argument('metadata-path', type=str,
                         help="Path to metadata file for scan", widget="FileChooser")
     parser.add_argument('-d', '--destination-path', type=str,
-                        help='''
-                        Destination path to send converted imaging and metadata files to. If 
-                        omitted defaults to using the path supplied to folder path. If destination path
-                        doesn't exist an attempt to create it will be made.''', required=False,
+                        help=
+                        "Destination path to send converted imaging and metadata files to. If " +
+                        "omitted defaults to using the path supplied to folder path. If destination path " +
+                        "doesn't exist an attempt to create it will be made.", required=False,
                         widget="FileChooser")
     parser.add_argument('-i', '--subject-id', type=str,
                         help='user supplied subject id. If left blank will use PatientName from dicom header',
                         required=False)
     parser.add_argument('-s', '--session_id', type=str,
-                        help='''User supplied session id. If left blank defaults to None/null and omits addition to 
-                             output''')
+                        help="User supplied session id. If left blank defaults to " +
+                             "None/null and omits addition to output")
 
     args = parser.parse_args()
 
