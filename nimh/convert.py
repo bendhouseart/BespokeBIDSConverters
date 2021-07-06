@@ -271,11 +271,12 @@ class Convert:
 
         # make a pandas dataframe from blood data
         blood_data_df = pandas.DataFrame.from_dict(self.future_blood_tsv)
-        blood_data_df.to_csv(identity_string + '_recording-manual_blood.tsv', sep='\t')
+        blood_data_df.to_csv(identity_string + '_recording-manual_blood.tsv', sep='\t', index=False)
 
         # make a small dataframe for the participants
         participants_df = pandas.DataFrame.from_dict(self.participant_info)
-        participants_df.to_csv('participants.tsv', sep='\t')
+        participants_df.to_csv('participants.tsv', sep='\t', index=False)
+
 
 @Gooey
 def cli():
