@@ -2,6 +2,7 @@ import nibabel
 import sys
 import os
 from os.path import isfile
+import numpy
 from gooey import Gooey, GooeyParser
 
 # use gui if no arguments are supplied to command line w/ call
@@ -123,15 +124,35 @@ class ConvertToNifti:
         # affine shape
         affine_shape = self.ecat.affine.shape
 
-        # main image data
+        # confirm number of frames is equal to fourth dimension value in image shape
+        print(f"image shape 4th-d: {image_shape[3]}, num frames: {self.ecat_main_header.get('num_frames')}")
+
+        # collect main image data
         main_image_data = self.ecat.get_fdata()
+
+        # prepare to flip sub arrays in main_image_data around?
+        flipped_flipped_flipped_array = numpy.empty(image_shape)
+        frame_start_times = []
+        frame_delta_times = []
+        frame_prompts = []
+        frame_randoms = []
+
+        # do this for every frame
+        for frame_number in range(image_shape[3]):
+            subheader = self.ecat_subheaders[frame_number]
+            frame_data = main_image_data[:, :, :, frame_number]
+            flipped_flipped_flipped_array[:, :, :, frame_number] = numpy.flip(numpy.flip(
+                numpy.flip(frame_data * subheader['scale_factor']['value'], 2), 3), 1)
+            frame_start_times.append(subheader['frame_start_time']['value']*60)
+            frame_delta_times.append(subheader['frame_duration']['value']*60)
+
+        # Not sure what this is for but running with it
+        if self.ecat_main_header['sw_version'] >= 73:
+            frame_prompts.append(subheader.get('prompt_rate', {}).get('value', None))
+            frame_prompts.append(subheader.get('prompt_rate', {}).get('value', None))
 
         # debug
         print("Debug")
-
-
-
-        pass
 
 
 @Gooey
