@@ -1,6 +1,5 @@
 import os.path
 import subprocess
-import argparse
 import pandas
 import pandas as pd
 import sys
@@ -162,8 +161,10 @@ class Convert:
         :return:
         """
 
-        convert = subprocess.run(f"dcm2niix -w 0 -o {self.destination_path} {self.image_folder}", shell=True, capture_output=True)
-        if convert.returncode != 0 and bytes("Skipping existing file named", 'utf-8') not in convert.stdout or convert.stderr:
+        convert = subprocess.run(f"dcm2niix -w 0 -o {self.destination_path} {self.image_folder}", shell=True,
+                                 capture_output=True)
+        if convert.returncode != 0 and bytes("Skipping existing file named",
+                                             'utf-8') not in convert.stdout or convert.stderr:
             raise Exception("Error during image conversion from dcm to nii!")
 
         # note dcm2niix will go through folder and look for dicoms, it will then create a nifti with a filename
@@ -178,11 +179,12 @@ class Convert:
             'ManufacturersModelName': self.nifti_json_data['ManufacturersModelName'],
             'Units': 'Bq/mL',
             'TracerName': self.nifti_json_data['Radiopharmaceutical'],  # need to grab part of this string
-            'TracerRadionuclide': self.nifti_json_data['RadionuclideTotalDose']/10**6,
+            'TracerRadionuclide': self.nifti_json_data['RadionuclideTotalDose'] / 10 ** 6,
             'InjectedRadioactivityUnits': 'MBq',
-            'InjectedMass': self.metadata_dataframe.iloc[35, 10]*self.metadata_dataframe.iloc[38, 6],  # nmol/kg * weight
+            'InjectedMass': self.metadata_dataframe.iloc[35, 10] * self.metadata_dataframe.iloc[38, 6],
+            # nmol/kg * weight
             'InjectedMassUnits': 'nmol',
-            'MolarActivity': self.metadata_dataframe.iloc[0, 35]*0.000037,  # uCi to GBq
+            'MolarActivity': self.metadata_dataframe.iloc[0, 35] * 0.000037,  # uCi to GBq
             'MolarActivityUnits': 'GBq/nmol',
             'SpecificRadioactivity': 'n/a',
             'SpecificRadioactivityUnits': 'n/a',
@@ -192,7 +194,8 @@ class Convert:
             'InjectionStart': 0,
             'FrameTimesStart':
                 [int(entry) for entry in ([0] +
-                list(cumsum(self.nifti_json_data['FrameDuration']))[0:len(self.nifti_json_data['FrameDuration']) - 1])],
+                                          list(cumsum(self.nifti_json_data['FrameDuration']))[
+                                          0:len(self.nifti_json_data['FrameDuration']) - 1])],
             'FrameDuration': self.nifti_json_data['FrameDuration'],
             'AcquisitionMode': 'list mode',
             'ImageDecayCorrected': True,
@@ -218,10 +221,10 @@ class Convert:
         }
 
         future_blood_tsv = {
-            'time': self.metadata_dataframe.iloc[2:7, 6]*60, # convert minutes to seconds,
-            'PlasmaRadioactivity': self.metadata_dataframe.iloc[2:7, 7]/60,
-            'WholeBloodRadioactivity': self.metadata_dataframe.iloc[2:7, 9]/60,
-            'MetaboliteParentFraction': self.metadata_dataframe.iloc[2:7, 8]/60
+            'time': self.metadata_dataframe.iloc[2:7, 6] * 60,  # convert minutes to seconds,
+            'PlasmaRadioactivity': self.metadata_dataframe.iloc[2:7, 7] / 60,
+            'WholeBloodRadioactivity': self.metadata_dataframe.iloc[2:7, 9] / 60,
+            'MetaboliteParentFraction': self.metadata_dataframe.iloc[2:7, 8] / 60
         }
 
         participants_tsv = {
