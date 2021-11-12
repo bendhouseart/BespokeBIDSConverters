@@ -137,3 +137,4 @@ dmypy.json
 
 # this completely
 ignore_me
+.DS_Store

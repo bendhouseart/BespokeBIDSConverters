@@ -1,9 +1,21 @@
+import os.path
 import subprocess
+import pandas
 import pandas as pd
 import sys
 from os.path import isdir, isfile
 from os import listdir, walk, makedirs
 import pathlib
+import json
+import pydicom
+import re
+from numpy import cumsum
+from gooey import Gooey, GooeyParser
+
+# determine whether to run as gui or not
+if len(sys.argv) >= 2:
+    if '--ignore-gooey' not in sys.argv:
+        sys.argv.append('--ignore-gooey')
 
 
 class Convert:
@@ -13,7 +25,9 @@ class Convert:
         self.destination_path = destination_path
         self.subject_id = subject_id
         self.session_id = session_id
-        self.metadata_dataframe = None
+        self.metadata_dataframe = None  # dataframe object of text file metadata
+        self.dicom_header_data = None  # extracted data from dicom header
+        self.nifti_json_data = None  # extracted data from dcm2niix generated json file
 
         # if no destination path is supplied plop nifti into the same folder as the dicom images
         if not destination_path:
@@ -32,14 +46,93 @@ class Convert:
                             "dcm2niix was not found in path, try installing or adding to path variable.")
 
         # no reason not to convert the image files immediately if dcm2niix is there
-        self.dcm2niix()
+        self.run_dcm2niix()
+
+        # extract all metadata
+        self.extract_dicom_header()
+        self.extract_nifti_json()
+        self.extract_metadata()
+
+        # create strings for output files
+        if self.session_id:
+            self.session_string = '_ses-' + self.session_id
+        else:
+            self.session_string = ''
+
+        # now for subject id
+        if subject_id:
+            self.subject_id = subject_id
+        else:
+            self.subject_id = str(self.dicom_header_data.PatientName)
+            # check for non-bids values
+            self.subject_id = re.sub("[^a-zA-Z\d\s:]", '', self.subject_id)
+
+        self.subject_string = 'sub-' + self.subject_id
+
+        # build output structures for metadata
+        bespoke_data = self.bespoke()
+
+        # assign output structures to class variables
+        self.future_json = bespoke_data['future_json']
+        self.future_blood_tsv = bespoke_data['future_blood_tsv']
+        self.future_blood_json = bespoke_data['future_blood_json']
+        self.participant_info = bespoke_data['participants_info']
 
     @staticmethod
     def check_for_dcm2niix():
         check = subprocess.run("dcm2niix -h", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return check.returncode
 
-    def collect_metadata(self):
+    def extract_dicom_header(self, additional_fields=[]):
+        """
+        Opening up files till a dicom is located, then extracting any header information
+        to be used during and after the conversion process. This includes patient/subject id,
+        as well any additional frame or metadata that's required for
+        :return:
+        """
+
+        for root, dirs, files in os.walk(self.image_folder):
+            for f in files:
+                try:
+                    dicom_header = pydicom.dcmread(os.path.join(root, f))
+
+                    # collect subject/patient id if none is supplied
+                    if self.subject_id is None:
+                        self.subject_id = dicom_header.PatientID
+
+                    self.dicom_header_data = dicom_header
+                    break
+
+                except pydicom.errors.InvalidDicomError:
+                    pass
+
+    def extract_nifti_json(self):
+        """
+        Collects the information contained in the wanted information list and adds it to self.
+        :return:
+        """
+
+        # look for nifti json in destination folder
+        pet_json = None
+        collect_contents = listdir(self.destination_path)
+        for filepath in collect_contents:
+            if ".json" in filepath:
+                pet_json = filepath
+                break
+            else:
+                for root, dirs, files in os.walk(self.destination_path):
+                    for f in files:
+                        if ".json" in f:
+                            pet_json = os.path.join(root, f)
+                            break
+
+        if pet_json is None:
+            raise Exception("Unable to find json file for nifti image")
+
+        with open(pet_json, 'r') as infile:
+            self.nifti_json_data = json.load(infile)
+
+    def extract_metadata(self):
         """
         Opens up a metadata file and reads it into a pandas dataframe
         :return: a pd dataframe object
@@ -47,8 +140,6 @@ class Convert:
         # collect metadata from spreadsheet
         metadata_extension = pathlib.Path(self.metadata_path).suffix
         self.open_meta_data(metadata_extension)
-
-        # collect other metadata from one or more dicom files that might not get picked up by dcm2niix
 
     def open_meta_data(self, extension):
         methods = {'excel': pd.read_excel}
@@ -61,34 +152,168 @@ class Convert:
         try:
             use_me_to_read = methods.get(proper_method, None)
             self.metadata_dataframe = use_me_to_read(self.metadata_path)
-        except IOError:
-            print(f"Problem opening {self.metadata_path}")
+        except IOError as err:
+            raise err(f"Problem opening {self.metadata_path}")
 
-    def dcm2niix(self):
+    def run_dcm2niix(self):
         """
         Just passing some args to dcm2niix using the good ole shell
         :return:
         """
-        convert = subprocess.run(f"dcm2niix -o {self.destination_path} {self.image_folder}", shell=True)
-        if convert.returncode != 0:
+
+        convert = subprocess.run(f"dcm2niix -w 0 -o {self.destination_path} {self.image_folder}", shell=True,
+                                 capture_output=True)
+        if convert.returncode != 0 and bytes("Skipping existing file named",
+                                             'utf-8') not in convert.stdout or convert.stderr:
             raise Exception("Error during image conversion from dcm to nii!")
 
+        # note dcm2niix will go through folder and look for dicoms, it will then create a nifti with a filename
+        # of the folder dcm2niix was pointed at with a .nii extension. In other words it will place a .nii file with
+        # the parent folder's name in the parent folder. We need to keep track of this path and possibly (most likely)
+        # rename it
 
+    def bespoke(self):
+
+        future_json = {
+            'Manufacturer': self.nifti_json_data['Manufacturer'],
+            'ManufacturersModelName': self.nifti_json_data['ManufacturersModelName'],
+            'Units': 'Bq/mL',
+            'TracerName': self.nifti_json_data['Radiopharmaceutical'],  # need to grab part of this string
+            'TracerRadionuclide': self.nifti_json_data['RadionuclideTotalDose'] / 10 ** 6,
+            'InjectedRadioactivityUnits': 'MBq',
+            'InjectedMass': self.metadata_dataframe.iloc[35, 10] * self.metadata_dataframe.iloc[38, 6],
+            # nmol/kg * weight
+            'InjectedMassUnits': 'nmol',
+            'MolarActivity': self.metadata_dataframe.iloc[0, 35] * 0.000037,  # uCi to GBq
+            'MolarActivityUnits': 'GBq/nmol',
+            'SpecificRadioactivity': 'n/a',
+            'SpecificRadioactivityUnits': 'n/a',
+            'ModeOfAdministration': 'bolus',
+            'TimeZero': '10:15:14',
+            'ScanStart': 61,
+            'InjectionStart': 0,
+            'FrameTimesStart':
+                [int(entry) for entry in ([0] +
+                                          list(cumsum(self.nifti_json_data['FrameDuration']))[
+                                          0:len(self.nifti_json_data['FrameDuration']) - 1])],
+            'FrameDuration': self.nifti_json_data['FrameDuration'],
+            'AcquisitionMode': 'list mode',
+            'ImageDecayCorrected': True,
+            'ImageDecayCorrectionTime': -61,
+            'ReconMethodName': self.dicom_header_data.ReconstructionMethod,
+            'ReconMethodParameterLabels': ['iterations', 'subsets', 'lower energy threshold', 'upper energy threshold'],
+            'ReconMethodParameterUnits': ['none', 'none', 'keV', 'keV'],
+            'ReconMethodParameterValues': [
+                3,
+                21,
+                float(min(re.findall('\d+\.\d+', str(self.dicom_header_data.EnergyWindowRangeSequence).lower()))),
+                float(max(re.findall('\d+\.\d+', str(self.dicom_header_data.EnergyWindowRangeSequence).lower()))),
+            ],
+            'ReconFilterType': self.dicom_header_data.ConvolutionKernel,
+            'ReconFilterSize': 0,
+            'AttenuationCorrection': self.dicom_header_data.AttenuationCorrectionMethod,
+            'DecayCorrectionFactor': self.nifti_json_data['DecayFactor']
+
+        }
+
+        future_blood_json = {
+
+        }
+
+        future_blood_tsv = {
+            'time': self.metadata_dataframe.iloc[2:7, 6] * 60,  # convert minutes to seconds,
+            'PlasmaRadioactivity': self.metadata_dataframe.iloc[2:7, 7] / 60,
+            'WholeBloodRadioactivity': self.metadata_dataframe.iloc[2:7, 9] / 60,
+            'MetaboliteParentFraction': self.metadata_dataframe.iloc[2:7, 8] / 60
+        }
+
+        participants_tsv = {
+            'sub_id': [self.subject_id],
+            'weight': [self.dicom_header_data.PatientWeight],
+            'sex': [self.dicom_header_data.PatientSex]
+        }
+
+        return {
+            'future_json': future_json,
+            'future_blood_json': future_blood_json,
+            'future_blood_tsv': future_blood_tsv,
+            'participants_info': participants_tsv
+        }
+
+    def write_out_jsons(self, manual_path=None):
+        """
+        Writes out blood and modified *_pet.json file at destination path
+        manual_path: a folder path specified at function cal by user, defaults none
+        :return:
+        """
+
+        if manual_path is None:
+            # dry
+            identity_string = os.path.join(self.destination_path, self.subject_string + self.session_string)
+        else:
+            identity_string = os.path.join(manual_path, self.subject_string + self.session_string)
+
+        with open(identity_string + '_pet.json', 'w') as outfile:
+            json.dump(self.future_json, outfile, indent=4)
+
+        # write out better json
+        with open(identity_string + '_recording-manual-blood.json', 'w') as outfile:
+            json.dump(self.future_blood_json, outfile, indent=4)
+
+    def write_out_blood_tsv(self, manual_path=None):
+        """
+        Creates a blood.tsv
+        manual_path:  a folder path specified at function call by user, defaults none
+        :return:
+        """
+        if manual_path is None:
+            # dry
+            identity_string = os.path.join(self.destination_path, self.subject_string + self.session_string)
+        else:
+            identity_string = os.path.join(manual_path, self.subject_string + self.session_string)
+
+        # make a pandas dataframe from blood data
+        blood_data_df = pandas.DataFrame.from_dict(self.future_blood_tsv)
+        blood_data_df.to_csv(identity_string + '_recording-manual_blood.tsv', sep='\t', index=False)
+
+        # make a small dataframe for the participants
+        participants_df = pandas.DataFrame.from_dict(self.participant_info)
+        participants_df.to_csv('participants.tsv', sep='\t', index=False)
+
+
+@Gooey
 def cli():
     # simple converter takes command line arguments <folder path> <destination path> <subject-id> <session-id>
-    command_line_args = sys.argv
+    parser = GooeyParser()
+    parser.add_argument('folder-path', type=str,
+                        help="Folder path containing imaging data", widget="FileChooser")
+    parser.add_argument('metadata-path', type=str,
+                        help="Path to metadata file for scan", widget="FileChooser")
+    parser.add_argument('-d', '--destination-path', type=str,
+                        help=
+                        "Destination path to send converted imaging and metadata files to. If " +
+                        "omitted defaults to using the path supplied to folder path. If destination path " +
+                        "doesn't exist an attempt to create it will be made.", required=False,
+                        widget="FileChooser")
+    parser.add_argument('-i', '--subject-id', type=str,
+                        help='user supplied subject id. If left blank will use PatientName from dicom header',
+                        required=False)
+    parser.add_argument('-s', '--session_id', type=str,
+                        help="User supplied session id. If left blank defaults to " +
+                             "None/null and omits addition to output")
 
-    if len(command_line_args) < 2:
-        print("Must supply at least a folder path to arguments.")
-        sys.exit(1)
+    args = parser.parse_args()
 
-    if len(command_line_args) >= 2 and isdir(command_line_args[2]):
-        folder_path = command_line_args[1]
-    else:
-        raise FileNotFoundError(f"Folder path {command_line_args[2]} is not a valid folder/path.")
-    if len(command_line_args) >= 3:
-        destination_path = command_line_args[2]
-    if len(command_line_args) >= 4:
-        bids_subject_id = command_line_args[3]
-    if len(command_line_args) >= 5:
-        bids_session_id = command_line_args[4]
+    if not isdir(args.folder_path):
+        raise FileNotFoundError(f"{args.folder_path} is not a valid path")
+
+    converter = Convert(args.folder_path, args.destination_path, args.subject_id, args.session_id)
+
+    # convert it all!
+    converter.bespoke()
+    converter.write_out_jsons()
+    converter.write_out_blood_tsv()
+
+
+if __name__ == "__main__":
+    cli()
