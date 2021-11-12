@@ -9,6 +9,7 @@ import pathlib
 import json
 import pydicom
 import re
+import platform
 from numpy import cumsum
 from gooey import Gooey, GooeyParser
 
@@ -19,10 +20,10 @@ if len(sys.argv) >= 2:
 
 
 class Convert:
-    def __init__(self, image_folder, metadata_path, destination_path=None, subject_id=None, session_id=None):
+    def __init__(self, image_folder, metadata_path=None, destination_path=None, subject_id=None, session_id=None):
         self.image_folder = image_folder
         self.metadata_path = metadata_path
-        self.destination_path = destination_path
+        self.destination_path = None
         self.subject_id = subject_id
         self.session_id = session_id
         self.metadata_dataframe = None  # dataframe object of text file metadata
@@ -35,6 +36,7 @@ class Convert:
         else:
             # make sure destination path exists
             if isdir(destination_path):
+                self.destination_path = destination_path
                 pass
             else:
                 print(f"No folder found at destination, creating folder(s) at {destination_path}")
@@ -51,7 +53,16 @@ class Convert:
         # extract all metadata
         self.extract_dicom_header()
         self.extract_nifti_json()
-        self.extract_metadata()
+        if self.metadata_path:
+            self.extract_metadata()
+            # build output structures for metadata
+            bespoke_data = self.bespoke()
+
+            # assign output structures to class variables
+            self.future_json = bespoke_data['future_json']
+            self.future_blood_tsv = bespoke_data['future_blood_tsv']
+            self.future_blood_json = bespoke_data['future_blood_json']
+            self.participant_info = bespoke_data['participants_info']
 
         # create strings for output files
         if self.session_id:
@@ -68,15 +79,6 @@ class Convert:
             self.subject_id = re.sub("[^a-zA-Z\d\s:]", '', self.subject_id)
 
         self.subject_string = 'sub-' + self.subject_id
-
-        # build output structures for metadata
-        bespoke_data = self.bespoke()
-
-        # assign output structures to class variables
-        self.future_json = bespoke_data['future_json']
-        self.future_blood_tsv = bespoke_data['future_blood_tsv']
-        self.future_blood_json = bespoke_data['future_blood_json']
-        self.participant_info = bespoke_data['participants_info']
 
     @staticmethod
     def check_for_dcm2niix():
@@ -117,7 +119,7 @@ class Convert:
         collect_contents = listdir(self.destination_path)
         for filepath in collect_contents:
             if ".json" in filepath:
-                pet_json = filepath
+                pet_json = os.path.join(self.destination_path, filepath)
                 break
             else:
                 for root, dirs, files in os.walk(self.destination_path):
@@ -161,10 +163,11 @@ class Convert:
         :return:
         """
 
-        convert = subprocess.run(f"dcm2niix -w 0 -o {self.destination_path} {self.image_folder}", shell=True,
+        convert = subprocess.run(f"dcm2niix -w 1 -z y -o {self.destination_path} {self.image_folder}", shell=True,
                                  capture_output=True)
         if convert.returncode != 0 and bytes("Skipping existing file named",
                                              'utf-8') not in convert.stdout or convert.stderr:
+            print(convert.stderr)
             raise Exception("Error during image conversion from dcm to nii!")
 
         # note dcm2niix will go through folder and look for dicoms, it will then create a nifti with a filename
@@ -175,11 +178,11 @@ class Convert:
     def bespoke(self):
 
         future_json = {
-            'Manufacturer': self.nifti_json_data['Manufacturer'],
-            'ManufacturersModelName': self.nifti_json_data['ManufacturersModelName'],
+            'Manufacturer': self.nifti_json_data.get('Manufacturer'),
+            'ManufacturersModelName': self.nifti_json_data.get('ManufacturersModelName'),
             'Units': 'Bq/mL',
-            'TracerName': self.nifti_json_data['Radiopharmaceutical'],  # need to grab part of this string
-            'TracerRadionuclide': self.nifti_json_data['RadionuclideTotalDose'] / 10 ** 6,
+            'TracerName': self.nifti_json_data.get('Radiopharmaceutical'),  # need to grab part of this string
+            'TracerRadionuclide': self.nifti_json_data.get('RadionuclideTotalDose', default=0) / 10 ** 6,
             'InjectedRadioactivityUnits': 'MBq',
             'InjectedMass': self.metadata_dataframe.iloc[35, 10] * self.metadata_dataframe.iloc[38, 6],
             # nmol/kg * weight
@@ -281,38 +284,81 @@ class Convert:
         participants_df.to_csv('participants.tsv', sep='\t', index=False)
 
 
+# get around dark mode issues on OSX
+if platform.system() == 'Darwin':
+    item_default = {
+        'error_color': '#ea7878',
+        'label_color': '#000000',
+        'text_field_color': '#ffffff',
+        'text_color': '#000000',
+        'help_color': '#363636',
+        'full_width': False,
+        'validator': {
+            'type': 'local',
+            'test': 'lambda x: True',
+            'message': ''
+        },
+        'external_validator': {
+            'cmd': '',
+        }
+    }
+else:
+    item_default = None
+
+
+''''@Gooey(
+    dump_build_config=True,
+    #program_name="Widget Demo",
+    advanced=True,
+    auto_start=False,
+    body_bg_color='#262626',
+    header_bg_color='#262626',
+    footer_bg_color='#262626',
+    sidebar_bg_color='#262626',
+)
+'''
+
+
 @Gooey
 def cli():
     # simple converter takes command line arguments <folder path> <destination path> <subject-id> <session-id>
     parser = GooeyParser()
-    parser.add_argument('folder-path', type=str,
-                        help="Folder path containing imaging data", widget="FileChooser")
-    parser.add_argument('metadata-path', type=str,
-                        help="Path to metadata file for scan", widget="FileChooser")
-    parser.add_argument('-d', '--destination-path', type=str,
+    parser.add_argument('folder', type=str,
+                        help="Folder path containing imaging data", widget="DirChooser", gooey_options=item_default)
+    parser.add_argument('-m', '--metadata-path', type=str,
+                        help="Path to metadata file for scan", widget="FileChooser",
+                        gooey_options=item_default)
+    parser.add_argument('-d', '--destination-path', type=str, gooey_options=item_default,
                         help=
                         "Destination path to send converted imaging and metadata files to. If " +
                         "omitted defaults to using the path supplied to folder path. If destination path " +
                         "doesn't exist an attempt to create it will be made.", required=False,
-                        widget="FileChooser")
-    parser.add_argument('-i', '--subject-id', type=str,
+                        widget="DirChooser")
+    parser.add_argument('-i', '--subject-id', type=str, gooey_options=item_default,
                         help='user supplied subject id. If left blank will use PatientName from dicom header',
                         required=False)
-    parser.add_argument('-s', '--session_id', type=str,
+    parser.add_argument('-s', '--session_id', type=str, gooey_options=item_default,
                         help="User supplied session id. If left blank defaults to " +
                              "None/null and omits addition to output")
 
     args = parser.parse_args()
 
-    if not isdir(args.folder_path):
-        raise FileNotFoundError(f"{args.folder_path} is not a valid path")
+    if not isdir(args.folder):
+        raise FileNotFoundError(f"{args.folder} is not a valid path")
 
-    converter = Convert(args.folder_path, args.destination_path, args.subject_id, args.session_id)
+    converter = Convert(
+        image_folder=args.folder,
+        metadata_path=args.metadata_path,
+        destination_path=args.destination_path,
+        subject_id=args.subject_id,
+        session_id=args.session_id)
 
     # convert it all!
-    converter.bespoke()
-    converter.write_out_jsons()
-    converter.write_out_blood_tsv()
+    converter.run_dcm2niix()
+    if args.metadata_path:
+        converter.bespoke()
+        converter.write_out_jsons()
+        converter.write_out_blood_tsv()
 
 
 if __name__ == "__main__":
