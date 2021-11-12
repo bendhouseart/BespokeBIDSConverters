@@ -92,7 +92,3 @@ def cli():
         bids_subject_id = command_line_args[3]
     if len(command_line_args) >= 5:
         bids_session_id = command_line_args[4]
-
-
-
-test = Convert('/Users/galassiae/Desktop', '/Users/galassiae/Documents/')

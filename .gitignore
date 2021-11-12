@@ -130,6 +130,10 @@ dmypy.json
 
 # Jetbrains
 .idea/
+*DS_STORE*
 
 # VS Code
 .vscode/
+
+# this completely
+ignore_me
